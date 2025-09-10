@@ -1,0 +1,81 @@
+import os
+import cv2
+import face_recognition
+import numpy as np
+
+KNOWN_FACES_DIR = "known_faces"
+TOLERANCE = 0.5           # smaller => stricter match (0.4-0.6 typical)
+FRAME_THICKNESS = 2
+FONT_THICKNESS = 2
+MODEL = "hog"             # "cnn" is more accurate but needs GPU / dlib compiled with CUDA
+
+print("Loading known faces...")
+
+known_faces = []
+known_names = []
+
+for name in os.listdir(KNOWN_FACES_DIR):
+    person_dir = os.path.join(KNOWN_FACES_DIR, name)
+    if not os.path.isdir(person_dir):
+        continue
+    for filename in os.listdir(person_dir):
+        filepath = os.path.join(person_dir, filename)
+        image = face_recognition.load_image_file(filepath)
+        encs = face_recognition.face_encodings(image)
+        if len(encs) == 0:
+            print(f" WARNING: No faces found in {filepath}")
+            continue
+        known_faces.append(encs[0])
+        known_names.append(name)
+print(f"Found encodings for {len(known_faces)} faces.")
+
+# Start webcam
+video = cv2.VideoCapture(0)
+if not video.isOpened():
+    raise SystemExit("Could not open webcam")
+
+print("Starting webcam. Press 'q' to quit.")
+while True:
+    ret, frame = video.read()
+    if not ret:
+        break
+
+    # Resize frame for speed
+    small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+    rgb_small = small_frame[:, :, ::-1]  # BGR -> RGB
+
+    # Find faces and encodings in current frame
+    face_locations = face_recognition.face_locations(rgb_small, model=MODEL)
+    face_encodings = face_recognition.face_encodings(rgb_small, face_locations)
+
+    for face_encoding, face_location in zip(face_encodings, face_locations):
+        # Compare against known faces
+        distances = face_recognition.face_distance(known_faces, face_encoding)
+        if len(distances) > 0:
+            best_idx = np.argmin(distances)
+            if distances[best_idx] <= TOLERANCE:
+                name = known_names[best_idx]
+            else:
+                name = "Unknown"
+        else:
+            name = "Unknown"
+
+        # Scale back up face locations since we used a smaller frame
+        top, right, bottom, left = face_location
+        top *= 4
+        right *= 4
+        bottom *= 4
+        left *= 4
+
+        # Draw rectangle and label
+        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), FRAME_THICKNESS)
+        text_width, text_height = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, 0.75, FONT_THICKNESS)[0]
+        cv2.rectangle(frame, (left, bottom - 25), (left + text_width + 10, bottom), (0, 255, 0), cv2.FILLED)
+        cv2.putText(frame, name, (left + 5, bottom - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 0), FONT_THICKNESS)
+
+    cv2.imshow("Face Recognition", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+video.release()
+cv2.destroyAllWindows()
